@@ -1,11 +1,12 @@
-// NodeMCU (ESP8266) Wi-Fi 控制韌體: HTTP API 控制 D3/D4 輸出與 20x4 I2C LCD (2004)
+// NodeMCU (ESP8266) Wi-Fi 控制韌體: HTTP API 控制 D3~D8 輸出與 I2C LCD (1602/2004)
 // 開發板: NodeMCU 1.0 (ESP-12E); 函式庫: LiquidCrystal I2C (Frank de Brabander)
-// 接線: LCD SDA=D2, SCL=D1, VCC=VIN(5V), GND; 輸出 D3(GPIO0)、D4(GPIO2)
-// 注意: D3/D4 是開機腳位(開機時須為高電位), 外接負載請勿在開機時把它們拉低。D4 同時是板載 LED (低電位亮)。
+// 接線: LCD SDA=D2, SCL=D1, VCC=VIN(5V), GND; 輸出 D3(GPIO0) D4(GPIO2) D5(GPIO14) D6(GPIO12) D7(GPIO13) D8(GPIO15)
+// 輸出 ON = 3.3V (供正電), OFF = 0V (接地); 每腳電流請 < 12 mA, 較大負載請用電晶體/繼電器。
+// 注意: D3/D4/D8 是開機腳位 (D3/D4 開機須為高電位, D8 須為低電位), 外接負載請勿在開機時改變它們的電位。D4 同時是板載 LED (低電位亮)。
 //
 // API (同一區網, 無驗證, 請勿暴露到網際網路):
-//   GET  /status                      -> {"d3":0,"d4":1,"ip":"...","lcd":"0x3F","rssi":-60}
-//   GET  /gpio?pin=D3&state=1         -> 設定輸出 (pin = D3|D4, state = 0|1)
+//   GET  /status                      -> {"d3":0,"d4":1,"pins":{"D3":0,...,"D8":0},"ip":"...","lcd":"0x3F","rssi":-60}
+//   GET  /gpio?pin=D3&state=1         -> 設定輸出 (pin = D3~D8, state = 0|1)
 //   POST /lcd   (text=第1行\n第2行...) -> 清除並顯示, 最多 4 行 x 20 字元 (僅 ASCII)
 //   GET  /lcd/clear
 //   GET  /lcd/config?addr=auto|0x27|0x3F&cols=16|20&rows=2|4  -> 重新設定 LCD 位址/規格 (執行中生效)
@@ -18,14 +19,16 @@
 #include <LiquidCrystal_I2C.h>
 #include "wifi_secrets.h"   // 定義 WIFI_SSID / WIFI_PASS (請複製 wifi_secrets.h.example)
 
-const uint8_t PIN_D3 = D3, PIN_D4 = D4;
+const uint8_t OUT_PINS[] = {D3, D4, D5, D6, D7, D8};
+const char *OUT_NAMES[] = {"D3", "D4", "D5", "D6", "D7", "D8"};
+const int N_OUT = 6;
+int outState[N_OUT] = {0};
 const char *MDNS_NAME = "esp-lab";   // 可用 http://esp-lab.local/
 
 ESP8266WebServer server(80);
 LiquidCrystal_I2C *lcd = nullptr;
 uint8_t lcdAddr = 0;
 uint8_t lcdCols = 20, lcdRows = 4;
-int d3 = 0, d4 = 0;
 
 bool isLcdAddr(uint8_t a) { return (a >= 0x20 && a <= 0x27) || (a >= 0x38 && a <= 0x3F); }
 
@@ -61,7 +64,10 @@ void lcdShow(const String &text) {
 }
 
 void sendStatus() {
-  String j = "{\"d3\":" + String(d3) + ",\"d4\":" + String(d4) +
+  String pins = "{";
+  for (int i = 0; i < N_OUT; i++) pins += String(i ? "," : "") + "\"" + OUT_NAMES[i] + "\":" + String(outState[i]);
+  pins += "}";
+  String j = "{\"d3\":" + String(outState[0]) + ",\"d4\":" + String(outState[1]) + ",\"pins\":" + pins +
              ",\"ip\":\"" + WiFi.localIP().toString() + "\",\"lcd\":\"" +
              (lcdAddr ? "0x" + String(lcdAddr, HEX) : String("none")) +
              "\",\"cols\":" + String(lcdCols) + ",\"rows\":" + String(lcdRows) +
@@ -73,8 +79,7 @@ void setup() {
   Serial.begin(115200);
   delay(300);
   Serial.println("\n=== NodeMCU WiFi GUI firmware ===");
-  pinMode(PIN_D3, OUTPUT); pinMode(PIN_D4, OUTPUT);
-  digitalWrite(PIN_D3, LOW); digitalWrite(PIN_D4, LOW);
+  for (int i = 0; i < N_OUT; i++) { pinMode(OUT_PINS[i], OUTPUT); digitalWrite(OUT_PINS[i], LOW); }
 
   // 掃描全部 I2C 位址 (PCF8574 為 0x20~0x27, PCF8574A 為 0x38~0x3F), 取第一個 LCD 背板
   // 找不到時再試 SDA/SCL 對調 (D1/D2), 方便診斷接反
@@ -117,9 +122,11 @@ void setup() {
   server.on("/gpio", HTTP_GET, []() {
     String pin = server.arg("pin"); pin.toUpperCase();
     int st = server.arg("state").toInt() ? 1 : 0;
-    if (pin == "D3")      { d3 = st; digitalWrite(PIN_D3, st); }
-    else if (pin == "D4") { d4 = st; digitalWrite(PIN_D4, st); }
-    else { server.send(400, "application/json", "{\"err\":\"pin must be D3 or D4\"}"); return; }
+    int idx = -1;
+    for (int i = 0; i < N_OUT; i++) if (pin == OUT_NAMES[i]) idx = i;
+    if (idx < 0) { server.send(400, "application/json", "{\"err\":\"pin must be D3..D8\"}"); return; }
+    outState[idx] = st;
+    digitalWrite(OUT_PINS[idx], st);
     Serial.printf("GPIO %s=%d\n", pin.c_str(), st);
     sendStatus();
   });

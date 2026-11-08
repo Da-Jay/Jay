@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""NodeMCU(ESP8266) Wi-Fi 控制 GUI: 控制 D3/D4 開關, 並傳送文字到 20x4 LCD。
+"""NodeMCU(ESP8266) Wi-Fi 控制 GUI: 控制 D3~D8 開關 (ON=3.3V, OFF=接地), 並傳送文字到 20x4 LCD。
 只用 Python 標準函式庫 (tkinter + urllib), 不需 pip 安裝。
 用法: python esp_gui.py [主機或IP]    預設 esp-lab.local
 """
+import concurrent.futures
 import json
 import os
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -12,6 +14,44 @@ import urllib.request
 
 TIMEOUT = 4
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".esp_gui.json")
+
+
+OUT_PINS = ["D3", "D4", "D5", "D6", "D7", "D8"]
+
+
+def local_subnet_prefix():
+    """回傳本機區網前綴, 例如 '192.168.18.'; 失敗回傳 None"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))  # UDP, 不會真的送出封包
+        return s.getsockname()[0].rsplit(".", 1)[0] + "."
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
+def _probe(host, timeout):
+    try:
+        with urllib.request.urlopen(f"http://{host}/status", timeout=timeout) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        return host if "pins" in d or "d3" in d else None
+    except (OSError, ValueError):
+        return None
+
+
+def scan_network(prefix=None, timeout=0.7, extra_hosts=("esp-lab.local",)):
+    """掃描區網 /24 (並試 mDNS 名稱), 回傳回應 /status 的 ESP 位址列表"""
+    prefix = prefix or local_subnet_prefix()
+    hosts = list(extra_hosts)
+    if prefix:
+        hosts += [f"{prefix}{i}" for i in range(1, 255)]
+    found = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=64) as ex:
+        for h in ex.map(lambda x: _probe(x, timeout), hosts):
+            if h:
+                found.append(h)
+    return found
 
 
 class EspClient:
@@ -79,7 +119,7 @@ def main():
 
     status_var = tk.StringVar(value="未連線")
     host_var = tk.StringVar(value=host)
-    gpio_vars = {"D3": tk.BooleanVar(), "D4": tk.BooleanVar()}
+    gpio_vars = {p: tk.BooleanVar() for p in OUT_PINS}
     size_var = tk.StringVar(value=saved.get("size", "20x4"))
     addr_var = tk.StringVar(value=saved.get("addr", "auto"))
     lcd_dim = {"cols": 20, "rows": 4}
@@ -105,8 +145,9 @@ def main():
     def apply_status(st):
         if not st:
             return
-        gpio_vars["D3"].set(bool(st["d3"]))
-        gpio_vars["D4"].set(bool(st["d4"]))
+        for p, v in st.get("pins", {"D3": st["d3"], "D4": st["d4"]}).items():
+            if p in gpio_vars:
+                gpio_vars[p].set(bool(v))
         if "cols" in st:
             lcd_dim["cols"], lcd_dim["rows"] = st["cols"], st["rows"]
             resize_text()
@@ -142,6 +183,19 @@ def main():
         if devs and addr_var.get() == "auto":
             addr_var.set(devs[0])
 
+    def scan_esp():
+        status_var.set("掃描區網中 (約數秒)...")
+        root.update_idletasks()
+        found = scan_network()
+        if not found:
+            status_var.set("區網內找不到 ESP (確認電腦與 ESP 在同一個 Wi-Fi)")
+            return
+        host_box.configure(values=found)
+        host_var.set(found[0])
+        connect()
+        if len(found) > 1:
+            status_var.set(status_var.get() + f"  (另有: {', '.join(found[1:])})")
+
     def toggle(pin):
         apply_status(run(client.set_gpio, pin, gpio_vars[pin].get()))
 
@@ -158,13 +212,19 @@ def main():
     frm = ttk.Frame(root, padding=12)
     frm.grid()
     ttk.Label(frm, text="ESP 位址 (IP 或 esp-lab.local):").grid(row=0, column=0, sticky="w")
-    ttk.Entry(frm, textvariable=host_var, width=22).grid(row=0, column=1, padx=6)
-    ttk.Button(frm, text="連線/更新狀態", command=connect).grid(row=0, column=2)
+    host_box = ttk.Combobox(frm, textvariable=host_var, values=[host], width=20)
+    host_box.grid(row=0, column=1, padx=6)
+    bar = ttk.Frame(frm)
+    bar.grid(row=0, column=2)
+    ttk.Button(bar, text="掃描 ESP", command=scan_esp).pack(side="left")
+    ttk.Button(bar, text="連線/更新", command=connect).pack(side="left", padx=(4, 0))
 
     ttk.Separator(frm).grid(row=1, column=0, columnspan=3, sticky="ew", pady=8)
-    for i, pin in enumerate(("D3", "D4")):
-        ttk.Checkbutton(frm, text=f"{pin} 輸出 ON", variable=gpio_vars[pin],
-                        command=lambda p=pin: toggle(p)).grid(row=2 + i, column=0, sticky="w")
+    pins_frame = ttk.LabelFrame(frm, text="輸出 (ON = 3.3V, OFF = 接地)", padding=6)
+    pins_frame.grid(row=2, column=0, columnspan=3, sticky="ew")
+    for i, pin in enumerate(OUT_PINS):
+        ttk.Checkbutton(pins_frame, text=f"{pin} ON", variable=gpio_vars[pin],
+                        command=lambda p=pin: toggle(p)).grid(row=i // 3, column=i % 3, sticky="w", padx=8, pady=2)
 
     ttk.Separator(frm).grid(row=4, column=0, columnspan=3, sticky="ew", pady=8)
     cfg = ttk.LabelFrame(frm, text="LCD 設定", padding=6)
