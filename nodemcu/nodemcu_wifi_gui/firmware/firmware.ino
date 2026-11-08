@@ -8,6 +8,8 @@
 //   GET  /gpio?pin=D3&state=1         -> 設定輸出 (pin = D3|D4, state = 0|1)
 //   POST /lcd   (text=第1行\n第2行...) -> 清除並顯示, 最多 4 行 x 20 字元 (僅 ASCII)
 //   GET  /lcd/clear
+//   GET  /lcd/config?addr=auto|0x27|0x3F&cols=16|20&rows=2|4  -> 重新設定 LCD 位址/規格 (執行中生效)
+//   GET  /i2c/scan                    -> {"devices":["0x3F",...]}
 
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
@@ -22,18 +24,36 @@ const char *MDNS_NAME = "esp-lab";   // 可用 http://esp-lab.local/
 ESP8266WebServer server(80);
 LiquidCrystal_I2C *lcd = nullptr;
 uint8_t lcdAddr = 0;
+uint8_t lcdCols = 20, lcdRows = 4;
 int d3 = 0, d4 = 0;
+
+bool isLcdAddr(uint8_t a) { return (a >= 0x20 && a <= 0x27) || (a >= 0x38 && a <= 0x3F); }
+
+bool i2cPresent(uint8_t a) {
+  Wire.beginTransmission(a);
+  return Wire.endTransmission() == 0;
+}
+
+// 依位址與規格(重新)初始化 LCD; addr=0 表示不使用
+void initLcd(uint8_t addr, uint8_t cols, uint8_t rows) {
+  delete lcd;
+  lcd = nullptr;
+  lcdAddr = addr; lcdCols = cols; lcdRows = rows;
+  if (!addr) return;
+  lcd = new LiquidCrystal_I2C(addr, cols, rows);
+  lcd->init(); lcd->backlight();
+}
 
 void lcdShow(const String &text) {
   if (!lcd) return;
   lcd->clear();
   int row = 0, start = 0;
-  while (row < 4 && start <= (int)text.length()) {
+  while (row < lcdRows && start <= (int)text.length()) {
     int nl = text.indexOf('\n', start);
     String line = (nl < 0) ? text.substring(start) : text.substring(start, nl);
     line.replace("\r", "");
     lcd->setCursor(0, row);
-    lcd->print(line.substring(0, 20));
+    lcd->print(line.substring(0, lcdCols));
     row++;
     if (nl < 0) break;
     start = nl + 1;
@@ -44,7 +64,8 @@ void sendStatus() {
   String j = "{\"d3\":" + String(d3) + ",\"d4\":" + String(d4) +
              ",\"ip\":\"" + WiFi.localIP().toString() + "\",\"lcd\":\"" +
              (lcdAddr ? "0x" + String(lcdAddr, HEX) : String("none")) +
-             "\",\"rssi\":" + String(WiFi.RSSI()) + "}";
+             "\",\"cols\":" + String(lcdCols) + ",\"rows\":" + String(lcdRows) +
+             ",\"rssi\":" + String(WiFi.RSSI()) + "}";
   server.send(200, "application/json", j);
 }
 
@@ -71,10 +92,9 @@ void setup() {
     if (attempt && lcdAddr) Serial.println("NOTE: LCD found only with SDA/SCL SWAPPED -> rewire SDA=D2, SCL=D1");
   }
   if (lcdAddr) {
-    lcd = new LiquidCrystal_I2C(lcdAddr, 20, 4);
-    lcd->init(); lcd->backlight();
+    initLcd(lcdAddr, lcdCols, lcdRows);
     lcdShow("NodeMCU ready\nConnecting WiFi...");
-    Serial.printf("LCD 20x4 at 0x%02X\n", lcdAddr);
+    Serial.printf("LCD %ux%u at 0x%02X\n", lcdCols, lcdRows, lcdAddr);
   } else {
     Serial.println("LCD not found (HTTP API still works)");
   }
@@ -112,6 +132,36 @@ void setup() {
   server.on("/lcd/clear", HTTP_GET, []() {
     if (lcd) lcd->clear();
     server.send(200, "application/json", "{\"ok\":true}");
+  });
+  server.on("/i2c/scan", HTTP_GET, []() {
+    String j = "{\"devices\":[";
+    bool first = true;
+    for (uint8_t a = 1; a < 127; a++) {
+      if (!i2cPresent(a)) continue;
+      if (!first) j += ",";
+      j += "\"0x" + String(a, HEX) + "\"";
+      first = false;
+    }
+    server.send(200, "application/json", j + "]}");
+  });
+  server.on("/lcd/config", HTTP_GET, []() {
+    int cols = server.arg("cols").toInt(), rows = server.arg("rows").toInt();
+    if (!(cols == 16 || cols == 20 || cols == 8 || cols == 40) || rows < 1 || rows > 4) {
+      server.send(400, "application/json", "{\"err\":\"cols must be 8|16|20|40, rows 1..4\"}");
+      return;
+    }
+    String a = server.arg("addr");
+    uint8_t addr = 0;
+    if (a == "" || a == "auto") {
+      for (uint8_t x = 1; x < 127 && !addr; x++) if (isLcdAddr(x) && i2cPresent(x)) addr = x;
+    } else {
+      addr = (uint8_t)strtol(a.c_str(), nullptr, 0);
+      if (!addr || addr > 127) { server.send(400, "application/json", "{\"err\":\"bad addr\"}"); return; }
+    }
+    initLcd(addr, cols, rows);
+    Serial.printf("LCD config: addr=0x%02X %dx%d found=%d\n", addr, cols, rows, addr && i2cPresent(addr));
+    if (lcd) lcdShow("LCD " + String(cols) + "x" + String(rows) + "\n0x" + String(addr, HEX));
+    sendStatus();
   });
   server.begin();
 }

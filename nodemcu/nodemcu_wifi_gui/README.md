@@ -16,7 +16,7 @@ LCD(2004 I2C 背板): SDA→D2, SCL→D1, VCC→VIN(5V), GND→GND。輸出 D3(G
 python gui/esp_gui.py            # 預設 esp-lab.local
 python gui/esp_gui.py 192.168.18.4
 ```
-只需 Python 3 (含 tkinter), 不需安裝套件。勾選 D3/D4 切換輸出, 在文字框輸入內容後按「寫入 LCD」。
+只需 Python 3 (含 tkinter), 不需安裝套件。在「LCD 設定」可選規格 (如 16x2、20x4)、I2C 位址 (auto/0x27/0x3F, 可按「掃描 I2C」), 按「套用」立即生效並記住設定 (存於 ~/.esp_gui.json)。勾選 D3/D4 切換輸出, 在文字框輸入內容後按「寫入 LCD」。
 
 ## HTTP API
-`GET /status`、`GET /gpio?pin=D3&state=1`、`POST /lcd` (text=...)、`GET /lcd/clear`。無驗證, 僅限區網使用。
+`GET /status`、`GET /gpio?pin=D3&state=1`、`POST /lcd` (text=...)、`GET /lcd/clear`、`GET /lcd/config?addr=auto|0x3F&cols=16&rows=2`、`GET /i2c/scan`。無驗證, 僅限區網使用。
