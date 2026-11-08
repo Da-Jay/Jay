@@ -4,7 +4,7 @@ XIAO ESP32-C6 (外接天線版) 經 Wi-Fi 由 PC 的 Python GUI 控制 D0~D10 �
 
 ## 韌體 (PlatformIO)
 1. 複製 `src/wifi_secrets.h.example` 為 `src/wifi_secrets.h`, 填入 Wi-Fi (C6 支援 2.4G/5G; 已被 .gitignore 排除)。
-2. 需 PlatformIO Core 6.2.1b2 以上 (`pip install -U https://github.com/platformio/platformio-core/archive/refs/heads/develop.zip`); `pio run -t upload` (COM13, pioarduino 平台, 首次下載約數分鐘)。
+2. 需 PlatformIO Core 6.2.1b2 以上 (`pip install -U https://github.com/platformio/platformio-core/archive/refs/heads/develop.zip`); `pio run -t upload` (COM14, pioarduino 平台, 首次下載約數分鐘)。
 3. `pio device monitor` 看序列埠 (115200) 的 IP。若無法上傳: 按住 B (BOOT) 鍵再插 USB。
 
 ## GUI
