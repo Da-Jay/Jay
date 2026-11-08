@@ -52,8 +52,9 @@ class Client:
     def __init__(self, host):
         self.host = host
 
-    def call(self, path, timeout=TIMEOUT):
-        with urllib.request.urlopen(f"http://{self.host}{path}", timeout=timeout) as r:
+    def call(self, path, timeout=TIMEOUT, data=None):
+        body = urllib.parse.urlencode(data).encode("utf-8") if data is not None else None
+        with urllib.request.urlopen(f"http://{self.host}{path}", data=body, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8"))
 
     def status(self):
@@ -64,6 +65,23 @@ class Client:
 
     def set_all(self, state):
         return self.call(f"/gpio/all?state={int(bool(state))}", 4)
+
+    def i2c_enable(self, on):
+        return self.call(f"/i2c/enable?on={int(bool(on))}", 5)
+
+    def i2c_scan(self):
+        return self.call("/i2c/scan", 8)["devices"]
+
+    def lcd_config(self, addr, cols, rows):
+        return self.call("/lcd/config?" + urllib.parse.urlencode({"addr": addr, "cols": cols, "rows": rows}), 6)
+
+    def lcd_write(self, text, cols, rows):
+        lines = [ln[:cols] for ln in text.splitlines()[:rows]]
+        safe = "\n".join(ln.encode("ascii", "replace").decode("ascii") for ln in lines)
+        return self.call("/lcd", 6, {"text": safe})
+
+    def lcd_clear(self):
+        return self.call("/lcd/clear", 5)
 
     def nettest(self):
         return self.call("/nettest")
@@ -115,6 +133,7 @@ def main():
     def apply_status(st):
         if not st:
             return
+        apply_i2c(st)
         for p, v in st["pins"].items():
             if p in gpio_vars:
                 gpio_vars[p].set(bool(v))
@@ -187,6 +206,59 @@ def main():
 
         threading.Thread(target=worker, daemon=True).start()
 
+    # ---- I2C / LCD ----
+    i2c_on = tk.BooleanVar(value=False)
+    lcd_size = tk.StringVar(value=saved.get("lcd_size", "16x2"))
+    lcd_addr = tk.StringVar(value="auto")
+    lcd_dim = {"cols": 16, "rows": 2}
+
+    def apply_i2c(st):
+        if "i2c" not in st:
+            return
+        i2c_on.set(bool(st["i2c"]))
+        if st.get("cols"):
+            lcd_dim["cols"], lcd_dim["rows"] = st["cols"], st["rows"]
+        i2c_info.set(f"I2C {'已啟用' if st['i2c'] else '未啟用'}  LCD {st.get('lcd', 'none')} {st.get('cols', '?')}x{st.get('rows', '?')}")
+
+    def i2c_toggle():
+        apply_status(run(client.i2c_enable, i2c_on.get()))
+
+    def i2c_scan():
+        if not i2c_on.get():
+            i2c_on.set(True)
+            apply_status(run(client.i2c_enable, True))
+        devs = run(client.i2c_scan)
+        if devs is None:
+            return
+        i2c_info.set("I2C 裝置: " + (", ".join(devs) if devs else "無 (確認接線 SDA=D4, SCL=D5、共地、上拉電阻)"))
+        addr_box.configure(values=["auto"] + devs)
+
+    def lcd_apply():
+        try:
+            c, r = (int(v) for v in lcd_size.get().lower().split("x"))
+        except ValueError:
+            status_var.set("規格格式錯誤, 例如 16x2")
+            return
+        if not i2c_on.get():
+            i2c_on.set(True)
+            apply_status(run(client.i2c_enable, True))
+        st = run(client.lcd_config, lcd_addr.get().strip() or "auto", c, r)
+        apply_status(st)
+        if st:
+            save_settings({"host": client.host, "lcd_size": lcd_size.get()})
+            if st.get("lcd") == "none":
+                status_var.set("找不到 LCD (請先「掃描 I2C」確認位址)")
+
+    def lcd_send():
+        text = lcd_text.get("1.0", "end").rstrip("\n")
+        r = run(client.lcd_write, text, lcd_dim["cols"], lcd_dim["rows"])
+        if r:
+            status_var.set("已寫入 LCD" if r.get("lcd") else "韌體尚未偵測到 LCD (先按「套用」)")
+
+    def lcd_clear():
+        if run(client.lcd_clear):
+            status_var.set("LCD 已清除")
+
     frm = ttk.Frame(root, padding=12)
     frm.grid()
     ttk.Label(frm, text="板子位址 (IP 或 xiao-c6.local):").grid(row=0, column=0, sticky="w")
@@ -214,7 +286,26 @@ def main():
     out = tk.Text(net, width=64, height=9, state="disabled", font=("Consolas", 10))
     out.grid(row=1, column=0, pady=(6, 0))
 
-    ttk.Label(frm, textvariable=status_var, foreground="#555").grid(row=3, column=0, columnspan=3, sticky="w", pady=(10, 0))
+    i2cf = ttk.LabelFrame(frm, text="I2C (SDA=D4, SCL=D5; 啟用後 D4/D5 不能當輸出)", padding=6)
+    i2cf.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+    ttk.Checkbutton(i2cf, text="啟用 I2C", variable=i2c_on, command=i2c_toggle).grid(row=0, column=0, sticky="w")
+    ttk.Button(i2cf, text="掃描 I2C", command=i2c_scan).grid(row=0, column=1, padx=6)
+    ttk.Label(i2cf, text="LCD 位址:").grid(row=0, column=2)
+    addr_box = ttk.Combobox(i2cf, textvariable=lcd_addr, values=["auto", "0x27", "0x3F"], width=7)
+    addr_box.grid(row=0, column=3, padx=4)
+    ttk.Label(i2cf, text="規格:").grid(row=0, column=4)
+    ttk.Combobox(i2cf, textvariable=lcd_size, values=["16x2", "20x4", "16x4", "20x2", "8x2"], width=6).grid(row=0, column=5, padx=4)
+    ttk.Button(i2cf, text="套用", command=lcd_apply).grid(row=0, column=6, padx=4)
+    lcd_text = tk.Text(i2cf, width=24, height=4, font=("Consolas", 12))
+    lcd_text.grid(row=1, column=0, columnspan=4, pady=6, sticky="w")
+    lcdb = ttk.Frame(i2cf)
+    lcdb.grid(row=1, column=4, columnspan=3, sticky="w")
+    ttk.Button(lcdb, text="寫入 LCD", command=lcd_send).pack(side="left")
+    ttk.Button(lcdb, text="清除", command=lcd_clear).pack(side="left", padx=4)
+    i2c_info = tk.StringVar(value="I2C 未啟用")
+    ttk.Label(i2cf, textvariable=i2c_info, foreground="#555").grid(row=2, column=0, columnspan=7, sticky="w")
+
+    ttk.Label(frm, textvariable=status_var, foreground="#555").grid(row=4, column=0, columnspan=3, sticky="w", pady=(10, 0))
     root.after(300, connect)
     root.mainloop()
 
