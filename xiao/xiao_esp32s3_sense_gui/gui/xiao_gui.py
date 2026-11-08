@@ -18,6 +18,7 @@ import urllib.request
 TIMEOUT = 12  # /nettest 需要數秒
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".xiao_gui.json")
 OUT_PINS = [f"D{i}" for i in range(11)]
+CAM_MAX_W, CAM_MAX_H = 640, 480  # 鏡頭顯示區上限 (像素)
 
 
 def local_subnet_prefix():
@@ -222,9 +223,15 @@ def main():
         deg = int(rot_var.get())
         if deg:
             img = img.rotate(-deg, expand=True)  # 順時針旋轉
+        w0, h0 = img.size
+        scale = min(CAM_MAX_W / w0, CAM_MAX_H / h0)  # 放大/縮小到固定顯示區, 保持比例
+        if abs(scale - 1) > 0.01:
+            from PIL import Image as _Im
+            img = img.resize((int(w0 * scale), int(h0 * scale)), _Im.BILINEAR)
         cam_state["photo"] = ImageTk.PhotoImage(img)
-        cam_label.configure(image=cam_state["photo"], text="")
-        fps_var.set(f"{img.width}x{img.height}  {1/dt:.1f} fps" if dt > 0 else "")
+        # 有圖片時 Label 的 width/height 以像素計, 設 0 讓它依圖片自動調整大小
+        cam_label.configure(image=cam_state["photo"], text="", width=0, height=0)
+        fps_var.set(f"{w0}x{h0} (顯示 {img.width}x{img.height})  {1/dt:.1f} fps" if dt > 0 else "")
 
     def cam_toggle():
         try:
