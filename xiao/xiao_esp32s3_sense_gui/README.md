@@ -14,8 +14,9 @@ XIAO ESP32-S3 Sense (OV2640 鏡頭) 經 Wi-Fi 由 PC 的 Python GUI 控制 D0~D1
 python gui/xiao_gui.py            # 預設 xiao-s3.local
 python gui/xiao_gui.py 192.168.1.50
 ```
-- 勾選 D0~D10 個別開關, 另有全部 ON/OFF。
+- 勾選 D0~D11 個別開關, 另有全部 ON/OFF。
 - 鏡頭: 按「開啟鏡頭」顯示即時畫面 (輪詢 /capture), 可切換解析度 QQVGA~XGA (越大越慢) 與旋轉 0/90/180/270 度 (鏡頭方向不對時用), 「存檔」存成 ~/Pictures/xiao_*.jpg。
+- 偵測到人: 勾選「偵測到人時 D11 ON」(需 `pip install "opencv-python<5" numpy`; OpenCV 5 預覽版缺少偵測功能, 請用 4.x)。GUI 在電腦端用 OpenCV (全身 HOG + 正面臉 + 上半身) 偵測, 有人就 ON、無人 3 秒後 OFF, 並在畫面框出。S3 沒有 D11 腳, **D11 = 板載使用者 LED (GPIO21, 亮=ON)**。畫面方向不對時先設「旋轉」, 偵測才準; 解析度建議 VGA。
 - 「開始測試」: 顯示 SSID/頻段/頻道/RSSI、PC→板子延遲, 以及板子端 DNS、TCP、HTTP 外網測試。
 
 ## HTTP API

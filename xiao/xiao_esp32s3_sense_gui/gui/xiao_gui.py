@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """XIAO ESP32-S3 Sense Wi-Fi 控制 GUI: 分別開關 D0~D10 (ON=3.3V, OFF=接地), 並測試網路。
 只用 Python 標準函式庫 (tkinter + urllib), 不需 pip 安裝。
-鏡頭畫面需要 Pillow: pip install pillow (沒裝時只會缺少鏡頭畫面, 其餘功能正常)
+鏡頭畫面需要 Pillow: pip install pillow; 偵測人另需 pip install "opencv-python<5" numpy (沒裝時只會缺少鏡頭畫面, 其餘功能正常)
 用法: python xiao_gui.py [主機或IP]    預設 xiao-s3.local
 """
 import concurrent.futures
@@ -17,7 +17,8 @@ import urllib.request
 
 TIMEOUT = 12  # /nettest 需要數秒
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".xiao_gui.json")
-OUT_PINS = [f"D{i}" for i in range(11)]
+OUT_PINS = [f"D{i}" for i in range(12)]  # D11 = 板載 LED (GPIO21)
+HOLD_SEC = 3.0  # 偵測不到人後, 多久才關閉 D11
 CAM_MAX_W, CAM_MAX_H = 640, 480  # 鏡頭顯示區上限 (像素)
 
 
@@ -197,9 +198,46 @@ def main():
         threading.Thread(target=worker, daemon=True).start()
 
     # ---- 鏡頭 ----
-    cam_state = {"on": False, "photo": None, "last": None}
+    cam_state = {"on": False, "photo": None, "last": None, "rot": int(saved.get("rotate", "0")),
+                 "detect": False, "seen": 0.0, "d11": False}
+    detector = {}
     cam_var = tk.StringVar(value="QVGA")
     rot_var = tk.StringVar(value=saved.get("rotate", "0"))
+
+    def load_detector():
+        """載入 OpenCV 偵測器 (全身 HOG + 正面臉 + 上半身); 缺套件回傳 None"""
+        if "ok" in detector:
+            return detector["ok"]
+        try:
+            import cv2
+            import numpy as np
+            hog = cv2.HOGDescriptor()
+            hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+            detector.update(cv2=cv2, np=np, hog=hog,
+                            face=cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml"),
+                            upper=cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_upperbody.xml"), ok=True)
+        except ImportError:
+            detector["ok"] = False
+        return detector["ok"]
+
+    def detect_people(img):
+        """回傳 (boxes): 全身/臉/上半身任一偵測到就算有人"""
+        cv2, np = detector["cv2"], detector["np"]
+        gray = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2GRAY)
+        boxes = []
+        rects, _ = detector["hog"].detectMultiScale(gray, winStride=(8, 8), padding=(8, 8), scale=1.05)
+        boxes += [tuple(int(v) for v in r) for r in rects]
+        for key in ("face", "upper"):
+            boxes += [tuple(int(v) for v in r) for r in detector[key].detectMultiScale(gray, 1.1, 5, minSize=(30, 30))]
+        return boxes
+
+    def set_d11(on):
+        try:
+            client.set_gpio("D11", on)
+            cam_state["d11"] = on
+            root.after(0, lambda: gpio_vars["D11"].set(on))
+        except (OSError, ValueError):
+            pass
 
     def cam_loop():
         """背景執行緒: 持續抓 /capture, 以 Pillow 解碼後交給主執行緒顯示"""
@@ -212,6 +250,22 @@ def main():
                 img = Image.open(io.BytesIO(data))
                 img.load()
                 cam_state["last"] = data
+                if cam_state["rot"]:
+                    img = img.rotate(-cam_state["rot"], expand=True)  # 先轉正, 偵測才準
+                if cam_state["detect"] and detector.get("ok"):
+                    from PIL import ImageDraw
+                    boxes = detect_people(img)
+                    now = time.time()
+                    if boxes:
+                        cam_state["seen"] = now
+                        d = ImageDraw.Draw(img)
+                        for (x, y, w, h) in boxes:
+                            d.rectangle([x, y, x + w, y + h], outline=(0, 255, 0), width=2)
+                        if not cam_state["d11"]:
+                            set_d11(True)
+                    elif cam_state["d11"] and now - cam_state["seen"] > HOLD_SEC:
+                        set_d11(False)
+                    root.after(0, lambda n=len(boxes): det_var.set(f"偵測到人 ({n})" if n else "無人"))
                 root.after(0, lambda im=img, dt=time.time() - t: show_frame(im, dt))
             except (OSError, ValueError) as e:
                 root.after(0, lambda e=e: status_var.set(f"鏡頭錯誤: {e}"))
@@ -220,9 +274,6 @@ def main():
 
     def show_frame(img, dt):
         from PIL import ImageTk
-        deg = int(rot_var.get())
-        if deg:
-            img = img.rotate(-deg, expand=True)  # 順時針旋轉
         w0, h0 = img.size
         scale = min(CAM_MAX_W / w0, CAM_MAX_H / h0)  # 放大/縮小到固定顯示區, 保持比例
         if abs(scale - 1) > 0.01:
@@ -301,13 +352,34 @@ def main():
     size_box = ttk.Combobox(camb, textvariable=cam_var, values=["QQVGA", "QVGA", "VGA", "SVGA", "XGA"], width=7, state="readonly")
     size_box.pack(side="left")
     size_box.bind("<<ComboboxSelected>>", cam_change_size)
+    def on_rot(_e=None):
+        cam_state["rot"] = int(rot_var.get())
+        save_settings({"host": client.host, "rotate": rot_var.get()})
+
+    def on_detect():
+        if det_on.get() and not load_detector():
+            det_on.set(False)
+            status_var.set("缺少 OpenCV: 請執行 pip install opencv-python==4.* numpy 後重開 GUI")
+            return
+        cam_state["detect"] = bool(det_on.get())
+        if not det_on.get():
+            det_var.set("")
+            if cam_state["d11"]:
+                threading.Thread(target=set_d11, args=(False,), daemon=True).start()
+
     ttk.Label(camb, text=" 旋轉:").pack(side="left")
     rot_box = ttk.Combobox(camb, textvariable=rot_var, values=["0", "90", "180", "270"], width=4, state="readonly")
     rot_box.pack(side="left")
-    rot_box.bind("<<ComboboxSelected>>", lambda _e: save_settings({"host": client.host, "rotate": rot_var.get()}))
+    rot_box.bind("<<ComboboxSelected>>", on_rot)
     ttk.Button(camb, text="存檔", command=cam_save).pack(side="left", padx=6)
+    det_on = tk.BooleanVar(value=False)
+    det_var = tk.StringVar()
     fps_var = tk.StringVar()
     ttk.Label(camb, textvariable=fps_var).pack(side="left", padx=6)
+    camb2 = ttk.Frame(camf)
+    camb2.grid(row=2, column=0, sticky="w", pady=(4, 0))
+    ttk.Checkbutton(camb2, text="偵測到人時 D11 ON (無人 3 秒後 OFF)", variable=det_on, command=on_detect).pack(side="left")
+    ttk.Label(camb2, textvariable=det_var, foreground="#080").pack(side="left", padx=8)
     cam_label = tk.Label(camf, text="(鏡頭未開啟)", width=64, height=12, bg="#222", fg="#aaa")
     cam_label.grid(row=1, column=0, pady=(6, 0))
 

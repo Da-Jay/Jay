@@ -18,10 +18,13 @@
 #include "wifi_secrets.h"   // 定義 WIFI_SSID / WIFI_PASS
 
 // 使用板子變體定義的 D0~D10 (對應 GPIO 由 Arduino core 決定)
-const uint8_t OUT_PINS[] = {D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, D10};
-const char *OUT_NAMES[] = {"D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10"};
-const int N_OUT = 11;
+// D11 = 板載使用者 LED (GPIO21, 低電位亮; XIAO S3 沒有真正的 D11 腳, 韌體會自動反相, ON = LED 亮)
+const uint8_t OUT_PINS[] = {D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, D10, 21};
+const char *OUT_NAMES[] = {"D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", "D11"};
+const int N_OUT = 12;
+const int LED_IDX = 11;   // 低電位有效
 int outState[N_OUT] = {0};
+void writeOut(int i, int st) { outState[i] = st; digitalWrite(OUT_PINS[i], (i == LED_IDX) ? !st : st); }
 const char *MDNS_NAME = "xiao-s3";   // http://xiao-s3.local/
 
 WebServer server(80);
@@ -135,7 +138,7 @@ void setup() {
   Serial.begin(115200);
   delay(1500);
   Serial.println("\n=== XIAO ESP32-S3 Sense test firmware ===");
-  for (int i = 0; i < N_OUT; i++) { pinMode(OUT_PINS[i], OUTPUT); digitalWrite(OUT_PINS[i], LOW); }
+  for (int i = 0; i < N_OUT; i++) { pinMode(OUT_PINS[i], OUTPUT); writeOut(i, 0); }
 
   camOk = initCamera();
   WiFi.mode(WIFI_STA);
@@ -156,15 +159,14 @@ void setup() {
     int st = server.arg("state").toInt() ? 1 : 0;
     int idx = -1;
     for (int i = 0; i < N_OUT; i++) if (pin == OUT_NAMES[i]) idx = i;
-    if (idx < 0) { server.send(400, "application/json", "{\"err\":\"pin must be D0..D10\"}"); return; }
-    outState[idx] = st;
-    digitalWrite(OUT_PINS[idx], st);
+    if (idx < 0) { server.send(400, "application/json", "{\"err\":\"pin must be D0..D11\"}"); return; }
+    writeOut(idx, st);
     Serial.printf("GPIO %s=%d\n", pin.c_str(), st);
     sendStatus();
   });
   server.on("/gpio/all", HTTP_GET, []() {
     int st = server.arg("state").toInt() ? 1 : 0;
-    for (int i = 0; i < N_OUT; i++) { outState[i] = st; digitalWrite(OUT_PINS[i], st); }
+    for (int i = 0; i < N_OUT; i++) writeOut(i, st);
     Serial.printf("GPIO all=%d\n", st);
     sendStatus();
   });
