@@ -15,7 +15,7 @@ python gui/xiao_gui.py            # 預設 xiao-s3.local
 python gui/xiao_gui.py 192.168.1.50
 ```
 - 勾選 D0~D10 個別開關, 另有全部 ON/OFF。
-- 鏡頭: 按「開啟鏡頭」顯示即時畫面 (輪詢 /capture), 可切換解析度 QQVGA~XGA (越大越慢), 「存檔」存成 ~/Pictures/xiao_*.jpg。
+- 鏡頭: 按「開啟鏡頭」顯示即時畫面 (輪詢 /capture), 可切換解析度 QQVGA~XGA (越大越慢) 與旋轉 0/90/180/270 度 (鏡頭方向不對時用), 「存檔」存成 ~/Pictures/xiao_*.jpg。
 - 「開始測試」: 顯示 SSID/頻段/頻道/RSSI、PC→板子延遲, 以及板子端 DNS、TCP、HTTP 外網測試。
 
 ## HTTP API

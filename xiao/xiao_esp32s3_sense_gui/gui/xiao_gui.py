@@ -133,7 +133,7 @@ def main():
         st = run(client.status)
         apply_status(st)
         if st:
-            save_settings({"host": client.host})
+            save_settings({"host": client.host, "rotate": rot_var.get()})
 
     def scan_esp():
         status_var.set("掃描區網中 (約數秒)...")
@@ -198,6 +198,7 @@ def main():
     # ---- 鏡頭 ----
     cam_state = {"on": False, "photo": None, "last": None}
     cam_var = tk.StringVar(value="QVGA")
+    rot_var = tk.StringVar(value=saved.get("rotate", "0"))
 
     def cam_loop():
         """背景執行緒: 持續抓 /capture, 以 Pillow 解碼後交給主執行緒顯示"""
@@ -218,6 +219,9 @@ def main():
 
     def show_frame(img, dt):
         from PIL import ImageTk
+        deg = int(rot_var.get())
+        if deg:
+            img = img.rotate(-deg, expand=True)  # 順時針旋轉
         cam_state["photo"] = ImageTk.PhotoImage(img)
         cam_label.configure(image=cam_state["photo"], text="")
         fps_var.set(f"{img.width}x{img.height}  {1/dt:.1f} fps" if dt > 0 else "")
@@ -290,6 +294,10 @@ def main():
     size_box = ttk.Combobox(camb, textvariable=cam_var, values=["QQVGA", "QVGA", "VGA", "SVGA", "XGA"], width=7, state="readonly")
     size_box.pack(side="left")
     size_box.bind("<<ComboboxSelected>>", cam_change_size)
+    ttk.Label(camb, text=" 旋轉:").pack(side="left")
+    rot_box = ttk.Combobox(camb, textvariable=rot_var, values=["0", "90", "180", "270"], width=4, state="readonly")
+    rot_box.pack(side="left")
+    rot_box.bind("<<ComboboxSelected>>", lambda _e: save_settings({"host": client.host, "rotate": rot_var.get()}))
     ttk.Button(camb, text="存檔", command=cam_save).pack(side="left", padx=6)
     fps_var = tk.StringVar()
     ttk.Label(camb, textvariable=fps_var).pack(side="left", padx=6)
