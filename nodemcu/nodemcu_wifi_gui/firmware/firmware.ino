@@ -55,14 +55,20 @@ void setup() {
   pinMode(PIN_D3, OUTPUT); pinMode(PIN_D4, OUTPUT);
   digitalWrite(PIN_D3, LOW); digitalWrite(PIN_D4, LOW);
 
-  Wire.begin(D2, D1);
   // 掃描全部 I2C 位址 (PCF8574 為 0x20~0x27, PCF8574A 為 0x38~0x3F), 取第一個 LCD 背板
-  for (uint8_t a = 1; a < 127; a++) {
-    Wire.beginTransmission(a);
-    if (Wire.endTransmission() == 0) {
-      Serial.printf("I2C device at 0x%02X\n", a);
-      if (!lcdAddr && ((a >= 0x20 && a <= 0x27) || (a >= 0x38 && a <= 0x3F))) lcdAddr = a;
+  // 找不到時再試 SDA/SCL 對調 (D1/D2), 方便診斷接反
+  for (int attempt = 0; attempt < 2 && !lcdAddr; attempt++) {
+    uint8_t sda = attempt ? D1 : D2, scl = attempt ? D2 : D1;
+    Wire.begin(sda, scl);
+    Serial.printf("I2C scan with SDA=GPIO%d SCL=GPIO%d\n", sda, scl);
+    for (uint8_t a = 1; a < 127; a++) {
+      Wire.beginTransmission(a);
+      if (Wire.endTransmission() == 0) {
+        Serial.printf("I2C device at 0x%02X\n", a);
+        if (!lcdAddr && ((a >= 0x20 && a <= 0x27) || (a >= 0x38 && a <= 0x3F))) lcdAddr = a;
+      }
     }
+    if (attempt && lcdAddr) Serial.println("NOTE: LCD found only with SDA/SCL SWAPPED -> rewire SDA=D2, SCL=D1");
   }
   if (lcdAddr) {
     lcd = new LiquidCrystal_I2C(lcdAddr, 20, 4);
