@@ -1,6 +1,6 @@
-// NodeMCU (ESP8266) Wi-Fi 控制韌體: HTTP API 控制 D3~D8 輸出與 I2C LCD (1602/2004)
+// NodeMCU (ESP8266) / ESP32 Wi-Fi 控制韌體: HTTP API 控制 D3~D8 輸出與 I2C LCD (1602/2004)
 // 開發板: NodeMCU 1.0 (ESP-12E); 函式庫: LiquidCrystal I2C (Frank de Brabander)
-// 接線: LCD SDA=D2, SCL=D1, VCC=VIN(5V), GND; 輸出 D3(GPIO0) D4(GPIO2) D5(GPIO14) D6(GPIO12) D7(GPIO13) D8(GPIO15)
+// 接線 (NodeMCU): LCD SDA=D2, SCL=D1, VCC=VIN(5V), GND; (ESP32): SDA=GPIO21, SCL=GPIO22; NodeMCU 輸出 D3(GPIO0) D4(GPIO2) D5(GPIO14) D6(GPIO12) D7(GPIO13) D8(GPIO15)
 // 輸出 ON = 3.3V (供正電), OFF = 0V (接地); 每腳電流請 < 12 mA, 較大負載請用電晶體/繼電器。
 // 注意: D3/D4/D8 是開機腳位 (D3/D4 開機須為高電位, D8 須為低電位), 外接負載請勿在開機時改變它們的電位。D4 同時是板載 LED (低電位亮)。
 //
@@ -12,20 +12,35 @@
 //   GET  /lcd/config?addr=auto|0x27|0x3F&cols=16|20&rows=2|4  -> 重新設定 LCD 位址/規格 (執行中生效)
 //   GET  /i2c/scan                    -> {"devices":["0x3F",...]}
 
-#include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
-#include <ESP8266mDNS.h>
+#if defined(ESP32)
+  #include <WiFi.h>
+  #include <WebServer.h>
+  #include <ESPmDNS.h>
+#else
+  #include <ESP8266WiFi.h>
+  #include <ESP8266WebServer.h>
+  #include <ESP8266mDNS.h>
+  typedef ESP8266WebServer WebServer;
+#endif
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include "wifi_secrets.h"   // 定義 WIFI_SSID / WIFI_PASS (請複製 wifi_secrets.h.example)
 
+#if defined(ESP32)
+// ESP32 (ESP-WROOM-32 DevKit): 名稱沿用 D3~D8 以相容 GUI, 對應到不受開機腳位影響的 GPIO
+//   D3=GPIO25 D4=GPIO26 D5=GPIO27 D6=GPIO32 D7=GPIO33 D8=GPIO23; I2C: SDA=GPIO21, SCL=GPIO22
+const uint8_t OUT_PINS[] = {25, 26, 27, 32, 33, 23};
+const uint8_t I2C_SDA = 21, I2C_SCL = 22;
+#else
 const uint8_t OUT_PINS[] = {D3, D4, D5, D6, D7, D8};
+const uint8_t I2C_SDA = D2, I2C_SCL = D1;
+#endif
 const char *OUT_NAMES[] = {"D3", "D4", "D5", "D6", "D7", "D8"};
 const int N_OUT = 6;
 int outState[N_OUT] = {0};
 const char *MDNS_NAME = "esp-lab";   // 可用 http://esp-lab.local/
 
-ESP8266WebServer server(80);
+WebServer server(80);
 LiquidCrystal_I2C *lcd = nullptr;
 uint8_t lcdAddr = 0;
 uint8_t lcdCols = 20, lcdRows = 4;
@@ -84,7 +99,7 @@ void setup() {
   // 掃描全部 I2C 位址 (PCF8574 為 0x20~0x27, PCF8574A 為 0x38~0x3F), 取第一個 LCD 背板
   // 找不到時再試 SDA/SCL 對調 (D1/D2), 方便診斷接反
   for (int attempt = 0; attempt < 2 && !lcdAddr; attempt++) {
-    uint8_t sda = attempt ? D1 : D2, scl = attempt ? D2 : D1;
+    uint8_t sda = attempt ? I2C_SCL : I2C_SDA, scl = attempt ? I2C_SDA : I2C_SCL;
     Wire.begin(sda, scl);
     Serial.printf("I2C scan with SDA=GPIO%d SCL=GPIO%d\n", sda, scl);
     for (uint8_t a = 1; a < 127; a++) {
@@ -94,7 +109,7 @@ void setup() {
         if (!lcdAddr && ((a >= 0x20 && a <= 0x27) || (a >= 0x38 && a <= 0x3F))) lcdAddr = a;
       }
     }
-    if (attempt && lcdAddr) Serial.println("NOTE: LCD found only with SDA/SCL SWAPPED -> rewire SDA=D2, SCL=D1");
+    if (attempt && lcdAddr) Serial.println("NOTE: LCD found only with SDA/SCL SWAPPED -> rewire SDA/SCL");
   }
   if (lcdAddr) {
     initLcd(lcdAddr, lcdCols, lcdRows);
@@ -175,5 +190,7 @@ void setup() {
 
 void loop() {
   server.handleClient();
+#if !defined(ESP32)
   MDNS.update();
+#endif
 }

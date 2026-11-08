@@ -20,3 +20,12 @@ python gui/esp_gui.py 192.168.18.4
 
 ## HTTP API
 `GET /status`、`GET /gpio?pin=D3&state=1`、`POST /lcd` (text=...)、`GET /lcd/clear`、`GET /lcd/config?addr=auto|0x3F&cols=16&rows=2`、`GET /i2c/scan`。無驗證, 僅限區網使用。
+
+## ESP32 (ESP-WROOM-32 DevKit) 版本
+同一份 `firmware/firmware.ino` 也可用於 ESP32 (開發板選 ESP32 Dev Module / PlatformIO `esp32dev`)。GUI 不需修改, 腳位名稱沿用 D3~D8:
+
+| 名稱 | D3 | D4 | D5 | D6 | D7 | D8 |
+|---|---|---|---|---|---|---|
+| ESP32 GPIO | 25 | 26 | 27 | 32 | 33 | 23 |
+
+I2C LCD: SDA→GPIO21, SCL→GPIO22, VCC→5V(VIN), GND。上傳時若卡在 Connecting..., 按住板上 BOOT 鍵。
